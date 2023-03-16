@@ -1,0 +1,247 @@
+esphome:
+  name: baby-buttons
+  platform: ESP8266
+  board: d1_mini
+  #d1_mini
+  #nodemcuv2
+   
+wifi:
+  ssid: 'ssid'
+  password: 'password'
+  
+api:
+
+logger:
+  level: VERBOSE
+  logs:
+    text_sensor: INFO
+    http_request: VERBOSE
+    
+ota:
+
+web_server:
+  port: 80
+
+# states
+# 0 - initialize
+# 1 - pee
+# 2 - poo
+# 3 - both
+
+globals:
+  - id: is_pee
+    type: int
+    initial_value: '0'
+    
+  - id: is_poo
+    type: int
+    initial_value: '0'
+    
+  - id: this_function
+    type: int
+    initial_value: '0'
+
+http_request:
+  useragent: esphome/device
+  timeout: 10s
+  
+time:
+  - platform: homeassistant
+    id: sntp_time
+    on_time:
+      - seconds: 0
+        minutes: /1
+        then:
+        - component.update: current_time
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: D2
+      inverted: yes
+      mode: INPUT_PULLUP
+    name: "Pee"
+    id: pee
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      then:
+        - lambda: 'id(is_pee) = 1;'
+        - if:
+            condition:
+              - lambda: 'return id(this_function) == 0;'
+            then:
+              - lambda: 'id(this_function) = 1;'
+        - if:
+            condition:
+              - lambda: 'return id(is_poo) > 0;'
+            then:
+              - lambda: 'id(this_function) = 3;'
+    on_release:
+      then:
+        - script.execute: send_function
+
+  - platform: gpio
+    pin:
+      number: D1
+      inverted: yes
+      mode: INPUT_PULLUP
+    name: "Poo"
+    id: poo
+    filters:
+      - delayed_on: 10ms
+    on_press:
+      then:
+        - lambda: 'id(is_poo) = 1;'
+        - if:
+            condition:
+              - lambda: 'return id(this_function) == 0;'
+            then:
+              - lambda: 'id(this_function) = 2;'
+        - if:
+            condition:
+              - lambda: 'return id(is_pee) > 0;'
+            then:
+              - lambda: 'id(this_function) = 3;'
+    on_release:
+      then:
+        - script.execute: send_function
+                  
+light:
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO1
+    num_leds: 1
+    rgb_order: GRB
+    name: "Poo Light"
+    id: poo_light
+#RGB
+#BGR
+# -4:00 for on DST
+  - platform: fastled_clockless
+    chipset: WS2812B
+    pin: GPIO3
+    num_leds: 1
+    rgb_order: GRB
+    name: "Pee Light"
+    id: pee_light
+        
+text_sensor:
+  - platform: template
+    name: "Current time"
+    id: current_time
+    lambda: |-
+      char str[23];
+      time_t currTime = id(sntp_time).now().timestamp;
+      strftime(str, sizeof(str), "%Y-%m-%dT%H:%M-05:00", localtime(&currTime));
+      return { str };
+
+script:
+  - id: send_function
+    then:
+    - if:
+        condition:
+          or:
+            - binary_sensor.is_on: poo
+            - binary_sensor.is_on: pee
+        then:
+          - script.stop: send_function
+
+    - light.turn_on:
+        id: pee_light
+        brightness: !lambda |-
+          if(id(this_function) == 1) {
+            return 0.6; }
+          else if (id(this_function) == 3){
+            return 0.6; }
+          else {
+            return 0.0; }
+        red: 1.0
+        green: 0.0
+        blue: 1.0
+        
+
+    - light.turn_on:
+        id: poo_light
+        brightness: !lambda |-
+          if(id(this_function) == 2) {
+            return 0.6; }
+          else if (id(this_function) == 3){
+            return 0.6; }
+          else {
+            return 0.0; }
+        red: 1.0
+        green: 0.0
+        blue: 1.0
+
+    - http_request.post:
+        url: https://baby.mydomain.com/api/changes/
+        verify_ssl: false
+        headers:
+          Content-Type: "application/json"
+          Authorization: "Token <AUTH TOKEN>"
+        json:
+          child: "1"
+          amount: "0"
+          time: !lambda |-
+            return id(current_time).state;
+          wet: !lambda |-
+            if(id(this_function) == 1 or id(this_function) == 3) {
+              return "true"; }
+            else {
+              return "false"; }
+          solid: !lambda |-
+            if(id(this_function) == 2 or id(this_function) == 3) {
+              return "true"; }
+            else {
+              return "false"; }
+          
+    - light.turn_on:
+        id: pee_light
+        brightness: !lambda |-
+          if(id(this_function) == 1) {
+            return 0.6; }
+          else if (id(this_function) == 3){
+            return 0.6; }
+          else {
+            return 0.0; }   
+        red: 0.0
+        green: 1.0
+        blue: 1.0
+
+    - light.turn_on:
+        id: poo_light
+        brightness: !lambda |-
+          if(id(this_function) == 2) {
+            return 0.6; }
+          else if (id(this_function) == 3){
+            return 0.6; }
+          else {
+            return 0.0; }
+        red: 0.0
+        green: 1.0
+        blue: 1.0
+
+    - delay: 10s
+
+    - light.turn_off:
+        id: pee_light
+        transition_length: 10s
+
+    - light.turn_off:
+        id: poo_light
+        transition_length: 10s
+
+    - lambda: 'id(is_pee) = 0;'
+    - lambda: 'id(is_poo) = 0;'
+    - lambda: 'id(this_function) = 0;'
+# mac curl url
+# curl -X POST https://mydomain.com/api/changes/ -H 'Authorization: Token <AUTH TOKEN>' -H "Content-Type: application/json" --request POST --data '{"child": 1, "time": "2020-10-02T00:00-04:00", "wet": true, "solid": false}'
+
+#      - logger.log:
+#          format: "current_time %s"
+#          args: [ 'id(current_time).state.c_str()' ]
+
+#      - logger.log:
+#          format: "sntp_time %s"
+#          args: [ 'id(sntp_time).now()' ]
